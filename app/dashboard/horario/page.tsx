@@ -6,7 +6,7 @@ export default function HorarioPage() {
       <div>
         <h1>Horario de atención</h1>
         <p className="subtitle">
-          Marca cuándo atiende cada profesional y sus descansos. Tus clientes verán horarios según la persona que elijan.
+          Elige los días y horarios en que atiendes. Puedes usar el modo simple o, si necesitas algo distinto cada día, usar el modo avanzado.
         </p>
       </div>
       <HoursEditor />
