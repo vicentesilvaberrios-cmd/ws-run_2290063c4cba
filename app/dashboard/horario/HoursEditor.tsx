@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 
 interface BusinessHour {
   id: string;
@@ -119,6 +119,7 @@ export function HoursEditor() {
   const [breakEnd, setBreakEnd] = useState('14:00');
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
+  const formInitRef = useRef<string>(''); // tracks which prof the simple form was seeded for
 
   const loadProfessionals = useCallback(async () => {
     setProfLoading(true);
@@ -154,6 +155,34 @@ export function HoursEditor() {
       const [hData, bData] = await Promise.all([hRes.json(), bRes.json()]);
       setHours(hData);
       setBreaks(bData);
+
+      // Precargar el formulario simple con los datos del profesional
+      if (formInitRef.current !== selectedProf) {
+        formInitRef.current = selectedProf;
+        const hoursData = hData as BusinessHour[];
+        const breaksData = bData as Break[];
+        const activeDays: number[] = [...new Set(hoursData.map((h) => h.weekday))];
+        if (activeDays.length > 0) {
+          setSelectedDays(activeDays);
+          const firstHour = hoursData[0];
+          setDesde(firstHour.start_time.slice(0, 5));
+          setHasta(firstHour.end_time.slice(0, 5));
+          const firstBreak = breaksData.find((b) => activeDays.includes(b.weekday));
+          if (firstBreak) {
+            setHasBreak(true);
+            setBreakStart(firstBreak.start_time.slice(0, 5));
+            setBreakEnd(firstBreak.end_time.slice(0, 5));
+          } else {
+            setHasBreak(false);
+          }
+        } else {
+          // Sin horario configurado: usar valores por defecto
+          setSelectedDays([1, 2, 3, 4, 5]);
+          setDesde('09:00');
+          setHasta('18:00');
+          setHasBreak(false);
+        }
+      }
     } catch {
       setError(true);
     } finally {
@@ -274,6 +303,15 @@ export function HoursEditor() {
     setErrorMsg('');
     setSuccessMsg('');
     try {
+      // Eliminar bloques de días que ya no están seleccionados (evita huérfanos)
+      const removedDays = [0, 1, 2, 3, 4, 5, 6].filter((d) => !selectedDays.includes(d));
+      const orphanedHours = hours.filter((h) => removedDays.includes(h.weekday));
+      const orphanedBreaks = breaks.filter((b) => removedDays.includes(b.weekday));
+      await Promise.all([
+        ...orphanedHours.map((h) => fetch(`/api/business-hours/${h.id}`, { method: 'DELETE' })),
+        ...orphanedBreaks.map((b) => fetch(`/api/breaks/${b.id}`, { method: 'DELETE' })),
+      ]);
+
       for (const weekday of selectedDays) {
         // Borrar bloques existentes del día
         const dayHours = hours.filter((h) => h.weekday === weekday);
