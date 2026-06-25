@@ -1,0 +1,19 @@
+{
+  "backend": [],
+  "frontend": [
+    "EDIT app/dashboard/horario/HoursEditor.tsx: reemplazar la UI bloque-por-bloque por un formulario SIMPLE por defecto: selector de profesional arriba (solo visible si hay >1, por defecto el primero), casillas Lunes a Domingo con Lunes a Viernes marcadas por defecto, desplegables 'Desde'/'Hasta' en pasos de 30min limitados a 07:00-20:00 (por defecto 09:00 y 18:00) en formato 24h sin AM/PM, toggle 'Tomas un descanso (colacion)?' que muestra 'desde'/'hasta' (por defecto 13:00-14:00), un unico boton 'Guardar horario' que para cada dia marcado borra (DELETE existentes) y crea (POST) las filas de business_hours y breaks del profesional via los endpoints actuales /api/business-hours y /api/breaks, y un resumen en texto claro debajo; conservar opcionalmente un modo 'avanzado / por dia' con la UI actual detras de un toggle, reutilizando addHour/deleteHour/addBreak/deleteBreak",
+    "EDIT app/dashboard/horario/page.tsx: ajustar el subtitulo para describir el nuevo formulario simple de configuracion de horario"
+  ],
+  "acceptance_criteria": [
+    "La pantalla de configuracion de horario muestra por defecto un formulario simple con lenguaje claro, no la tabla bloque-por-bloque",
+    "'Que dias atiendes?' muestra casillas Lunes a Domingo con Lunes a Viernes marcadas por defecto",
+    "'Desde que hora?' y 'Hasta que hora?' son desplegables 24h en pasos de 30 minutos limitados a 07:00-20:00, con 09:00 y 18:00 por defecto y sin AM/PM",
+    "El toggle 'Tomas un descanso (colacion)?' al activarse muestra 'desde' y 'hasta' con mismo rango/pasos y valores por defecto 13:00 a 14:00",
+    "El boton 'Guardar horario' aplica la configuracion a TODOS los dias seleccionados creando o actualizando business_hours (y breaks si hay descanso) para el profesional seleccionado de una vez",
+    "Si el negocio tiene mas de un profesional, hay un selector arriba para elegir a quien se configura (por defecto el primero)",
+    "Debajo se muestra un resumen en texto claro, p.ej. 'Atiendes de Lunes a Viernes, de 09:00 a 18:00, con descanso de 13:00 a 14:00.'",
+    "Se mantiene un modo avanzado/por dia opcional para horarios distintos por dia",
+    "No se rompe nada existente: reserva publica, agenda, fichas, recordatorio (endpoint y reminder_sent_at), email, multi-tenant/RLS, constraint de no-solape por profesional, tz America/Santiago, formato 24h y precios CLP",
+    "Se respeta el esquema actual (business_hours y breaks con professional_id) sin modificar migraciones anteriores"
+  ]
+}
