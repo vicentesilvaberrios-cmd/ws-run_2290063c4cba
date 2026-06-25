@@ -158,7 +158,6 @@ export function HoursEditor() {
 
       // Precargar el formulario simple con los datos del profesional
       if (formInitRef.current !== selectedProf) {
-        formInitRef.current = selectedProf;
         const hoursData = hData as BusinessHour[];
         const breaksData = bData as Break[];
         const activeDays: number[] = [...new Set(hoursData.map((h) => h.weekday))];
@@ -182,6 +181,9 @@ export function HoursEditor() {
           setHasta('18:00');
           setHasBreak(false);
         }
+        // Marcar como inicializado solo tras procesar exitosamente,
+        // para que un reintento (si el fetch falló) vuelva a precargar.
+        formInitRef.current = selectedProf;
       }
     } catch {
       setError(true);
