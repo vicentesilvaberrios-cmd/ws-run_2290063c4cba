@@ -93,6 +93,15 @@ function buildSummary(
   return texto;
 }
 
+/** Burbuja de ayuda: muestra una explicación al pasar el mouse o al enfocar con teclado. */
+function HelpTip({ text }: { text: string }) {
+  return (
+    <span className="help-tip" data-tip={text} tabIndex={0} role="note" aria-label={text}>
+      ?
+    </span>
+  );
+}
+
 export function HoursEditor() {
   const [hours, setHours] = useState<BusinessHour[]>([]);
   const [breaks, setBreaks] = useState<Break[]>([]);
@@ -418,6 +427,7 @@ export function HoursEditor() {
           )}
           <label className="cluster gap-2" style={{ marginBottom: 0 }}>
             <span className="text-sm">Modo avanzado</span>
+            <HelpTip text="Úsalo solo si necesitas horarios distintos para cada día, o atender en dos tramos (por ejemplo mañana y tarde). Si tu horario es parejo toda la semana, deja esta opción apagada." />
             <input
               type="checkbox"
               checked={advancedMode}
@@ -570,8 +580,27 @@ export function HoursEditor() {
       {/* ====== MODO AVANZADO ====== */}
       {advancedMode && (
         <>
-          <div className="alert alert-info">
-            Estás en modo avanzado. Los cambios que hagas aquí reemplazarán el horario configurado en modo simple.
+          <div className="card stack" style={{ background: 'color-mix(in srgb, var(--info) 7%, var(--surface))', borderColor: 'var(--info)' }}>
+            <h2 style={{ fontSize: 'var(--fs-lg)', margin: 0 }}>Cómo configurar tu horario por día</h2>
+            <p className="text-sm muted" style={{ margin: 0 }}>
+              Usa esto cuando atiendes en horarios distintos según el día, o en dos tramos el mismo día.
+            </p>
+            <ol className="steps">
+              <li>Busca el día que quieres configurar (más abajo aparece una tarjeta por cada día).</li>
+              <li>
+                Elige la hora de inicio y de fin de ese tramo y presiona <strong>«Agregar tramo»</strong>.
+                <HelpTip text="Un tramo es un período seguido en que atiendes. Ejemplo: de 09:00 a 13:00. Si cierras al mediodía y vuelves en la tarde, agrega un segundo tramo (14:00 a 19:00)." />
+              </li>
+              <li>¿Atiendes mañana y tarde? Agrega un segundo tramo en ese mismo día (por ejemplo 09:00–13:00 y 15:00–19:00).</li>
+              <li>
+                Si dentro de un tramo tomas una pausa corta sin cerrar, agrégala como <strong>descanso</strong>.
+                <HelpTip text="El descanso es una pausa dentro de un tramo (por ejemplo, 30 minutos de colación). No hace falta crear dos tramos para eso: deja el tramo completo y marca el descanso." />
+              </li>
+              <li>Un día sin ningún tramo queda cerrado: no se podrá reservar en él.</li>
+            </ol>
+            <p className="text-sm" style={{ margin: 0, color: 'var(--warn)' }}>
+              ⚠️ Lo que configures aquí reemplaza lo que hayas puesto en el modo simple.
+            </p>
           </div>
 
           {errorMsg && (
@@ -589,7 +618,7 @@ export function HoursEditor() {
                 <h2 style={{ fontSize: 'var(--fs-xl)' }}>{dayName}</h2>
 
                 {dayHours.length === 0 && (
-                  <p className="text-sm muted">Sin bloques. Este día no estará disponible para reservar.</p>
+                  <p className="text-sm muted">Día cerrado. Agrega un tramo abajo para abrirlo a reservas.</p>
                 )}
 
                 {dayHours.length > 0 && (
@@ -619,36 +648,50 @@ export function HoursEditor() {
                   </div>
                 )}
 
-                <div className="cluster gap-2">
-                  <label htmlFor={`hour-start-${weekday}`} className="sr-only">Hora de inicio</label>
-                  <input
-                    id={`hour-start-${weekday}`}
-                    type="time"
-                    value={hourEntry.start}
-                    onChange={(e) => setNewHour((prev) => ({
-                      ...prev,
-                      [weekday]: { ...hourEntry, start: e.target.value },
-                    }))}
-                    style={{ maxWidth: 120 }}
-                  />
-                  <label htmlFor={`hour-end-${weekday}`} className="sr-only">Hora de fin</label>
-                  <input
-                    id={`hour-end-${weekday}`}
-                    type="time"
-                    value={hourEntry.end}
-                    onChange={(e) => setNewHour((prev) => ({
-                      ...prev,
-                      [weekday]: { ...hourEntry, end: e.target.value },
-                    }))}
-                    style={{ maxWidth: 120 }}
-                  />
-                  <button
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => addHour(weekday)}
-                    disabled={savingDay === weekday}
-                  >
-                    Añadir bloque
-                  </button>
+                <div className="stack gap-2">
+                  <p className="text-sm" style={{ fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center' }}>
+                    Agregar un tramo de atención
+                    <HelpTip text="Elige desde y hasta qué hora atiendes en este día. Para mañana y tarde, agrega dos tramos." />
+                  </p>
+                  <div className="cluster gap-2" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label htmlFor={`hour-start-${weekday}`}>Desde</label>
+                      <select
+                        id={`hour-start-${weekday}`}
+                        value={hourEntry.start}
+                        onChange={(e) => setNewHour((prev) => ({
+                          ...prev,
+                          [weekday]: { ...hourEntry, start: e.target.value },
+                        }))}
+                        style={{ maxWidth: 120 }}
+                      >
+                        <option value="">—</option>
+                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
+                      </select>
+                    </div>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label htmlFor={`hour-end-${weekday}`}>Hasta</label>
+                      <select
+                        id={`hour-end-${weekday}`}
+                        value={hourEntry.end}
+                        onChange={(e) => setNewHour((prev) => ({
+                          ...prev,
+                          [weekday]: { ...hourEntry, end: e.target.value },
+                        }))}
+                        style={{ maxWidth: 120 }}
+                      >
+                        <option value="">—</option>
+                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
+                      </select>
+                    </div>
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => addHour(weekday)}
+                      disabled={savingDay === weekday}
+                    >
+                      {savingDay === weekday ? 'Guardando…' : 'Agregar tramo'}
+                    </button>
+                  </div>
                 </div>
 
                 {dayBreaks.length > 0 && (
@@ -679,36 +722,50 @@ export function HoursEditor() {
                   </div>
                 )}
 
-                <div className="cluster gap-2">
-                  <label htmlFor={`break-start-${weekday}`} className="sr-only">Inicio del descanso</label>
-                  <input
-                    id={`break-start-${weekday}`}
-                    type="time"
-                    value={breakEntry.start}
-                    onChange={(e) => setNewBreak((prev) => ({
-                      ...prev,
-                      [weekday]: { ...breakEntry, start: e.target.value },
-                    }))}
-                    style={{ maxWidth: 120 }}
-                  />
-                  <label htmlFor={`break-end-${weekday}`} className="sr-only">Fin del descanso</label>
-                  <input
-                    id={`break-end-${weekday}`}
-                    type="time"
-                    value={breakEntry.end}
-                    onChange={(e) => setNewBreak((prev) => ({
-                      ...prev,
-                      [weekday]: { ...breakEntry, end: e.target.value },
-                    }))}
-                    style={{ maxWidth: 120 }}
-                  />
-                  <button
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => addBreak(weekday)}
-                    disabled={savingDay === weekday}
-                  >
-                    Añadir descanso
-                  </button>
+                <div className="stack gap-2">
+                  <p className="text-sm" style={{ fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center' }}>
+                    Agregar un descanso (opcional)
+                    <HelpTip text="Una pausa dentro de tu horario de atención, por ejemplo la colación. Durante el descanso no se podrá reservar." />
+                  </p>
+                  <div className="cluster gap-2" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label htmlFor={`break-start-${weekday}`}>Desde</label>
+                      <select
+                        id={`break-start-${weekday}`}
+                        value={breakEntry.start}
+                        onChange={(e) => setNewBreak((prev) => ({
+                          ...prev,
+                          [weekday]: { ...breakEntry, start: e.target.value },
+                        }))}
+                        style={{ maxWidth: 120 }}
+                      >
+                        <option value="">—</option>
+                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
+                      </select>
+                    </div>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label htmlFor={`break-end-${weekday}`}>Hasta</label>
+                      <select
+                        id={`break-end-${weekday}`}
+                        value={breakEntry.end}
+                        onChange={(e) => setNewBreak((prev) => ({
+                          ...prev,
+                          [weekday]: { ...breakEntry, end: e.target.value },
+                        }))}
+                        style={{ maxWidth: 120 }}
+                      >
+                        <option value="">—</option>
+                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
+                      </select>
+                    </div>
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => addBreak(weekday)}
+                      disabled={savingDay === weekday}
+                    >
+                      {savingDay === weekday ? 'Guardando…' : 'Agregar descanso'}
+                    </button>
+                  </div>
                 </div>
               </div>
             );

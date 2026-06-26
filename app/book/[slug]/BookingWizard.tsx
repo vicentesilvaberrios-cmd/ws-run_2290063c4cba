@@ -46,7 +46,7 @@ export function BookingWizard({
   const [step, setStep] = useState<Step>(1);
   const [services, setServices] = useState<Service[]>([]);
   const [loadingServices, setLoadingServices] = useState(true);
-  const [servicesError, setServicesError] = useState(false);
+  const [servicesError, setServicesError] = useState(initialError);
 
   const [selectedService, setSelectedService] = useState<Service | null>(null);
 
@@ -276,7 +276,7 @@ export function BookingWizard({
         </div>
       )}
 
-      {(initialError || servicesError) && !loadingServices && (
+      {servicesError && !loadingServices && (
         <div className="alert alert-error" role="alert">
           No pudimos cargar los servicios.{' '}
           <button className="btn btn-sm btn-ghost" onClick={loadServices}>Reintentar</button>
@@ -288,7 +288,7 @@ export function BookingWizard({
         <div className="stack">
           <h2>Elige un servicio</h2>
           {loadingServices && <p className="muted">Cargando servicios…</p>}
-          {!loadingServices && !servicesError && !initialError && services.length === 0 && (
+          {!loadingServices && !servicesError && services.length === 0 && (
             <div className="empty-state">
               Este negocio aún no tiene servicios disponibles. Vuelve más tarde.
             </div>

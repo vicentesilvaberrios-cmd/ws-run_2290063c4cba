@@ -1,22 +1,21 @@
 import { BookingWizard } from './BookingWizard';
+import { createClient } from '@/lib/supabase/server';
 
 export default async function BookPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
 
-  // Fetch org name + services server-side for initial render
+  // Nombre del negocio para el render inicial. Se consulta Supabase DIRECTAMENTE
+  // (sin auto-fetch HTTP a la propia app, que en producción no conoce su URL).
   let orgName: string | null = null;
   let loadError = false;
 
   try {
-    const base = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
-    const res = await fetch(`${base}/api/public/${slug}/services`, {
-      cache: 'no-store',
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        orgName = data[0].org_name ?? null;
-      }
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('public_services', { p_slug: slug });
+    if (error) {
+      loadError = true;
+    } else if (Array.isArray(data) && data.length > 0) {
+      orgName = data[0].org_name ?? null;
     }
   } catch {
     loadError = true;
