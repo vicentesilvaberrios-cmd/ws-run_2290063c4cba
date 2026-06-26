@@ -22,6 +22,17 @@ interface Professional {
   active: boolean;
 }
 
+// Orden de visualización del modo avanzado (Domingo a Sábado, estándar JS Date)
+const DAYS_FULL: { label: string; weekday: number }[] = [
+  { label: 'Domingo', weekday: 0 },
+  { label: 'Lunes', weekday: 1 },
+  { label: 'Martes', weekday: 2 },
+  { label: 'Miércoles', weekday: 3 },
+  { label: 'Jueves', weekday: 4 },
+  { label: 'Viernes', weekday: 5 },
+  { label: 'Sábado', weekday: 6 },
+];
+
 // weekday: 0=Domingo, 1=Lunes, … 6=Sábado (estándar JS Date)
 const WEEKDAYS: { label: string; value: number }[] = [
   { label: 'Lunes', value: 1 },
@@ -93,6 +104,56 @@ function buildSummary(
   return texto;
 }
 
+// ---- Modo avanzado: borrador editable por día (se guarda con un solo botón) ----
+type Tramo = { start: string; end: string };
+type DayDraft = { tramos: Tramo[]; descansos: Tramo[] };
+
+/** Construye el borrador editable a partir de los datos cargados. */
+function buildDraft(hours: BusinessHour[], breaks: Break[]): Record<number, DayDraft> {
+  const d: Record<number, DayDraft> = {};
+  for (let wd = 0; wd < 7; wd++) {
+    d[wd] = {
+      tramos: hours
+        .filter((h) => h.weekday === wd)
+        .sort((a, b) => a.start_time.localeCompare(b.start_time))
+        .map((h) => ({ start: h.start_time.slice(0, 5), end: h.end_time.slice(0, 5) })),
+      descansos: breaks
+        .filter((b) => b.weekday === wd)
+        .sort((a, b) => a.start_time.localeCompare(b.start_time))
+        .map((b) => ({ start: b.start_time.slice(0, 5), end: b.end_time.slice(0, 5) })),
+    };
+  }
+  return d;
+}
+
+/** Horas válidas para un descanso: solo las que caen dentro de algún tramo del día. */
+function breakOptions(tramos: Tramo[]): string[] {
+  const valid = tramos.filter((t) => t.start && t.end && t.start < t.end);
+  if (valid.length === 0) return [];
+  return TIME_OPTIONS.filter((t) => valid.some((tr) => t >= tr.start && t <= tr.end));
+}
+
+/** Valida la configuración de un día. Devuelve un mensaje de error o null si está OK. */
+function validateDay(dayName: string, d: DayDraft): string | null {
+  for (const t of d.tramos) {
+    if (!t.start || !t.end) return `${dayName}: completa el inicio y el fin de cada tramo.`;
+    if (t.start >= t.end) return `${dayName}: el fin del tramo debe ser posterior al inicio.`;
+  }
+  const sorted = [...d.tramos]
+    .filter((t) => t.start && t.end)
+    .sort((a, b) => a.start.localeCompare(b.start));
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].start < sorted[i - 1].end) return `${dayName}: los tramos no pueden solaparse.`;
+  }
+  for (const b of d.descansos) {
+    if (!b.start || !b.end) return `${dayName}: completa el inicio y el fin de cada descanso.`;
+    if (b.start >= b.end) return `${dayName}: el fin del descanso debe ser posterior al inicio.`;
+    const inside = d.tramos.some((t) => t.start && t.end && b.start >= t.start && b.end <= t.end);
+    if (!inside) return `${dayName}: el descanso debe estar dentro de un tramo de atención.`;
+  }
+  return null;
+}
+
 /** Burbuja de ayuda: muestra una explicación al pasar el mouse o al enfocar con teclado. */
 function HelpTip({ text }: { text: string }) {
   return (
@@ -113,10 +174,11 @@ export function HoursEditor() {
   const [profLoading, setProfLoading] = useState(true);
   const [selectedProf, setSelectedProf] = useState<string>('');
 
-  // Inline add state per day (modo avanzado)
-  const [newHour, setNewHour] = useState<Record<number, { start: string; end: string }>>({});
-  const [newBreak, setNewBreak] = useState<Record<number, { start: string; end: string }>>({});
-  const [savingDay, setSavingDay] = useState<number | null>(null);
+  // Modo avanzado: borrador editable (se arma local y se guarda con un solo botón)
+  const [draft, setDraft] = useState<Record<number, DayDraft>>({});
+  const [advSaving, setAdvSaving] = useState(false);
+  const [advError, setAdvError] = useState('');
+  const [advSuccess, setAdvSuccess] = useState('');
 
   // Modo simple
   const [advancedMode, setAdvancedMode] = useState(false);
@@ -164,6 +226,8 @@ export function HoursEditor() {
       const [hData, bData] = await Promise.all([hRes.json(), bRes.json()]);
       setHours(hData);
       setBreaks(bData);
+      // Sembrar el borrador editable del modo avanzado
+      setDraft(buildDraft(hData as BusinessHour[], bData as Break[]));
 
       // Precargar el formulario simple con los datos del profesional
       if (formInitRef.current !== selectedProf) {
@@ -211,86 +275,69 @@ export function HoursEditor() {
     setSuccessMsg('');
   }, [selectedDays, desde, hasta, hasBreak, breakStart, breakEnd, selectedProf]);
 
-  const validateTime = (start: string, end: string): string | null => {
-    if (!start || !end) return 'Completa la hora de inicio y fin';
-    if (start >= end) return 'La hora de fin debe ser posterior a la de inicio';
-    return null;
+  // ---- Modo avanzado: edición del borrador (no persiste hasta presionar Guardar) ----
+  const updateDay = (wd: number, fn: (d: DayDraft) => DayDraft) => {
+    setAdvSuccess('');
+    setAdvError('');
+    setDraft((prev) => ({ ...prev, [wd]: fn(prev[wd] || { tramos: [], descansos: [] }) }));
   };
+  const addTramo = (wd: number) =>
+    updateDay(wd, (d) => ({ ...d, tramos: [...d.tramos, { start: '', end: '' }] }));
+  const updateTramo = (wd: number, i: number, field: 'start' | 'end', val: string) =>
+    updateDay(wd, (d) => ({ ...d, tramos: d.tramos.map((t, j) => (j === i ? { ...t, [field]: val } : t)) }));
+  const removeTramo = (wd: number, i: number) =>
+    updateDay(wd, (d) => ({
+      ...d,
+      tramos: d.tramos.filter((_, j) => j !== i),
+      // Si quitas un tramo, descarta descansos que queden fuera de horario
+      descansos: d.descansos,
+    }));
+  const addDescanso = (wd: number) =>
+    updateDay(wd, (d) => ({ ...d, descansos: [...d.descansos, { start: '', end: '' }] }));
+  const updateDescanso = (wd: number, i: number, field: 'start' | 'end', val: string) =>
+    updateDay(wd, (d) => ({ ...d, descansos: d.descansos.map((b, j) => (j === i ? { ...b, [field]: val } : b)) }));
+  const removeDescanso = (wd: number, i: number) =>
+    updateDay(wd, (d) => ({ ...d, descansos: d.descansos.filter((_, j) => j !== i) }));
 
-  // ---- Funciones del modo avanzado (existentes) ----
-  const addHour = async (weekday: number) => {
-    const entry = newHour[weekday] || { start: '', end: '' };
-    const err = validateTime(entry.start, entry.end);
-    if (err) {
-      setErrorMsg(err);
-      return;
+  const saveAdvanced = async () => {
+    setAdvError('');
+    setAdvSuccess('');
+    for (const { label, weekday } of DAYS_FULL) {
+      const err = validateDay(label, draft[weekday] || { tramos: [], descansos: [] });
+      if (err) { setAdvError(err); return; }
     }
-    setSavingDay(weekday);
-    setErrorMsg('');
+    setAdvSaving(true);
     try {
-      const res = await fetch('/api/business-hours', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ weekday, start_time: entry.start, end_time: entry.end, professional_id: selectedProf }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'No pudimos guardar el bloque.');
+      // Borrar todo lo existente del profesional y recrear desde el borrador
+      await Promise.all([
+        ...hours.map((h) => fetch(`/api/business-hours/${h.id}`, { method: 'DELETE' })),
+        ...breaks.map((b) => fetch(`/api/breaks/${b.id}`, { method: 'DELETE' })),
+      ]);
+      for (const { weekday } of DAYS_FULL) {
+        const d = draft[weekday] || { tramos: [], descansos: [] };
+        for (const t of d.tramos) {
+          const r = await fetch('/api/business-hours', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ weekday, start_time: t.start, end_time: t.end, professional_id: selectedProf }),
+          });
+          if (!r.ok) throw new Error();
+        }
+        for (const b of d.descansos) {
+          const r = await fetch('/api/breaks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ weekday, start_time: b.start, end_time: b.end, professional_id: selectedProf }),
+          });
+          if (!r.ok) throw new Error();
+        }
       }
-      const created = await res.json();
-      setHours((prev) => [...prev, created]);
-      setNewHour((prev) => ({ ...prev, [weekday]: { start: '', end: '' } }));
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'No pudimos guardar el bloque.');
-    } finally {
-      setSavingDay(null);
-    }
-  };
-
-  const deleteHour = async (id: string) => {
-    try {
-      await fetch(`/api/business-hours/${id}`, { method: 'DELETE' });
-      setHours((prev) => prev.filter((h) => h.id !== id));
+      await loadAll();
+      setAdvSuccess('Horario guardado correctamente.');
     } catch {
-      // ignore
-    }
-  };
-
-  const addBreak = async (weekday: number) => {
-    const entry = newBreak[weekday] || { start: '', end: '' };
-    const err = validateTime(entry.start, entry.end);
-    if (err) {
-      setErrorMsg(err);
-      return;
-    }
-    setSavingDay(weekday);
-    setErrorMsg('');
-    try {
-      const res = await fetch('/api/breaks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ weekday, start_time: entry.start, end_time: entry.end, professional_id: selectedProf }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'No pudimos guardar el descanso.');
-      }
-      const created = await res.json();
-      setBreaks((prev) => [...prev, created]);
-      setNewBreak((prev) => ({ ...prev, [weekday]: { start: '', end: '' } }));
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'No pudimos guardar el descanso.');
+      setAdvError('No pudimos guardar el horario. Revisa los datos e inténtalo de nuevo.');
     } finally {
-      setSavingDay(null);
-    }
-  };
-
-  const deleteBreak = async (id: string) => {
-    try {
-      await fetch(`/api/breaks/${id}`, { method: 'DELETE' });
-      setBreaks((prev) => prev.filter((b) => b.id !== id));
-    } catch {
-      // ignore
+      setAdvSaving(false);
     }
   };
 
@@ -390,16 +437,6 @@ export function HoursEditor() {
   }
 
   const selectedProfessional = professionals.find((p) => p.id === selectedProf);
-
-  const DAYS_FULL: { label: string; weekday: number }[] = [
-    { label: 'Domingo', weekday: 0 },
-    { label: 'Lunes', weekday: 1 },
-    { label: 'Martes', weekday: 2 },
-    { label: 'Miércoles', weekday: 3 },
-    { label: 'Jueves', weekday: 4 },
-    { label: 'Viernes', weekday: 5 },
-    { label: 'Sábado', weekday: 6 },
-  ];
 
   return (
     <div className="stack">
@@ -586,190 +623,136 @@ export function HoursEditor() {
               Usa esto cuando atiendes en horarios distintos según el día, o en dos tramos el mismo día.
             </p>
             <ol className="steps">
-              <li>Busca el día que quieres configurar (más abajo aparece una tarjeta por cada día).</li>
+              <li>Ubica el día que quieres configurar (hay una tarjeta por cada día más abajo).</li>
               <li>
-                Elige la hora de inicio y de fin de ese tramo y presiona <strong>«Agregar tramo»</strong>.
-                <HelpTip text="Un tramo es un período seguido en que atiendes. Ejemplo: de 09:00 a 13:00. Si cierras al mediodía y vuelves en la tarde, agrega un segundo tramo (14:00 a 19:00)." />
+                En ese día, elige <strong>Desde</strong> y <strong>Hasta</strong> para armar un tramo de atención.
+                <HelpTip text="Un tramo es un período seguido en que atiendes. Ejemplo: de 09:00 a 13:00." />
               </li>
-              <li>¿Atiendes mañana y tarde? Agrega un segundo tramo en ese mismo día (por ejemplo 09:00–13:00 y 15:00–19:00).</li>
+              <li>¿Atiendes mañana y tarde? Presiona <strong>«+ Otro tramo»</strong> y agrega el segundo (por ejemplo 09:00–13:00 y 15:00–19:00).</li>
               <li>
-                Si dentro de un tramo tomas una pausa corta sin cerrar, agrégala como <strong>descanso</strong>.
-                <HelpTip text="El descanso es una pausa dentro de un tramo (por ejemplo, 30 minutos de colación). No hace falta crear dos tramos para eso: deja el tramo completo y marca el descanso." />
+                Si haces una pausa corta dentro de un tramo, agrégala como <strong>descanso</strong>; solo podrás elegir horas dentro de tu atención.
+                <HelpTip text="El descanso es una pausa dentro de un tramo (por ejemplo, la colación). No cierres el tramo: déjalo completo y marca el descanso." />
               </li>
-              <li>Un día sin ningún tramo queda cerrado: no se podrá reservar en él.</li>
+              <li>Un día sin tramos queda <strong>cerrado</strong> (no se podrá reservar).</li>
+              <li>Cuando termines con todos los días, presiona <strong>«Guardar horario»</strong> abajo. Nada se guarda hasta entonces.</li>
             </ol>
             <p className="text-sm" style={{ margin: 0, color: 'var(--warn)' }}>
-              ⚠️ Lo que configures aquí reemplaza lo que hayas puesto en el modo simple.
+              ⚠️ Lo que guardes aquí reemplaza lo que hayas puesto en el modo simple.
             </p>
           </div>
 
-          {errorMsg && (
-            <div className="alert alert-error" role="alert">{errorMsg}</div>
-          )}
-
           {DAYS_FULL.map(({ label: dayName, weekday }) => {
-            const dayHours = hours.filter((h) => h.weekday === weekday).sort((a, b) => a.start_time.localeCompare(b.start_time));
-            const dayBreaks = breaks.filter((b) => b.weekday === weekday).sort((a, b) => a.start_time.localeCompare(b.start_time));
-            const hourEntry = newHour[weekday] || { start: '', end: '' };
-            const breakEntry = newBreak[weekday] || { start: '', end: '' };
+            const day = draft[weekday] || { tramos: [], descansos: [] };
+            const brkOpts = breakOptions(day.tramos);
+            const canAddBreak = brkOpts.length > 0;
 
             return (
               <div key={weekday} className="card stack">
-                <h2 style={{ fontSize: 'var(--fs-xl)' }}>{dayName}</h2>
+                <div className="cluster gap-2" style={{ alignItems: 'baseline' }}>
+                  <h2 style={{ fontSize: 'var(--fs-xl)', margin: 0 }}>{dayName}</h2>
+                  {day.tramos.length === 0 && <span className="badge">Cerrado</span>}
+                </div>
 
-                {dayHours.length === 0 && (
-                  <p className="text-sm muted">Día cerrado. Agrega un tramo abajo para abrirlo a reservas.</p>
-                )}
-
-                {dayHours.length > 0 && (
-                  <div className="table-wrap">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th scope="col">Desde</th>
-                          <th scope="col">Hasta</th>
-                          <th scope="col"><span className="sr-only">Eliminar</span></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {dayHours.map((h) => (
-                          <tr key={h.id}>
-                            <td>{h.start_time.slice(0, 5)}</td>
-                            <td>{h.end_time.slice(0, 5)}</td>
-                            <td>
-                              <button className="btn btn-sm btn-danger" onClick={() => deleteHour(h.id)}>
-                                Eliminar
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
+                {/* Horario de atención (uno o más tramos) */}
                 <div className="stack gap-2">
                   <p className="text-sm" style={{ fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center' }}>
-                    Agregar un tramo de atención
-                    <HelpTip text="Elige desde y hasta qué hora atiendes en este día. Para mañana y tarde, agrega dos tramos." />
+                    Horario de atención
+                    <HelpTip text="Elige desde y hasta qué hora atiendes. Agrega otro tramo si trabajas en dos turnos (mañana y tarde)." />
                   </p>
-                  <div className="cluster gap-2" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                    <div className="field" style={{ marginBottom: 0 }}>
-                      <label htmlFor={`hour-start-${weekday}`}>Desde</label>
-                      <select
-                        id={`hour-start-${weekday}`}
-                        value={hourEntry.start}
-                        onChange={(e) => setNewHour((prev) => ({
-                          ...prev,
-                          [weekday]: { ...hourEntry, start: e.target.value },
-                        }))}
-                        style={{ maxWidth: 120 }}
-                      >
-                        <option value="">—</option>
-                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
-                      </select>
+                  {day.tramos.length === 0 && (
+                    <p className="text-sm muted" style={{ margin: 0 }}>
+                      Sin tramos: este día está cerrado. Agrega uno para abrirlo a reservas.
+                    </p>
+                  )}
+                  {day.tramos.map((t, i) => (
+                    <div key={i} className="cluster gap-2" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div className="field" style={{ marginBottom: 0 }}>
+                        <label htmlFor={`tramo-start-${weekday}-${i}`}>Desde</label>
+                        <select id={`tramo-start-${weekday}-${i}`} value={t.start}
+                          onChange={(e) => updateTramo(weekday, i, 'start', e.target.value)} style={{ maxWidth: 110 }}>
+                          <option value="">—</option>
+                          {TIME_OPTIONS.map((o) => (<option key={o} value={o}>{o}</option>))}
+                        </select>
+                      </div>
+                      <div className="field" style={{ marginBottom: 0 }}>
+                        <label htmlFor={`tramo-end-${weekday}-${i}`}>Hasta</label>
+                        <select id={`tramo-end-${weekday}-${i}`} value={t.end}
+                          onChange={(e) => updateTramo(weekday, i, 'end', e.target.value)} style={{ maxWidth: 110 }}>
+                          <option value="">—</option>
+                          {TIME_OPTIONS.map((o) => (<option key={o} value={o}>{o}</option>))}
+                        </select>
+                      </div>
+                      <button className="btn btn-sm btn-ghost" onClick={() => removeTramo(weekday, i)}
+                        aria-label={`Quitar tramo de ${dayName}`}>
+                        Quitar
+                      </button>
                     </div>
-                    <div className="field" style={{ marginBottom: 0 }}>
-                      <label htmlFor={`hour-end-${weekday}`}>Hasta</label>
-                      <select
-                        id={`hour-end-${weekday}`}
-                        value={hourEntry.end}
-                        onChange={(e) => setNewHour((prev) => ({
-                          ...prev,
-                          [weekday]: { ...hourEntry, end: e.target.value },
-                        }))}
-                        style={{ maxWidth: 120 }}
-                      >
-                        <option value="">—</option>
-                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
-                      </select>
-                    </div>
-                    <button
-                      className="btn btn-sm btn-primary"
-                      onClick={() => addHour(weekday)}
-                      disabled={savingDay === weekday}
-                    >
-                      {savingDay === weekday ? 'Guardando…' : 'Agregar tramo'}
+                  ))}
+                  <div>
+                    <button className="btn btn-sm btn-ghost" onClick={() => addTramo(weekday)}>
+                      {day.tramos.length === 0 ? '+ Agregar tramo' : '+ Otro tramo'}
                     </button>
                   </div>
                 </div>
 
-                {dayBreaks.length > 0 && (
-                  <div className="table-wrap">
-                    <p className="text-sm muted" style={{ fontWeight: 600 }}>Descansos</p>
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th scope="col">Desde</th>
-                          <th scope="col">Hasta</th>
-                          <th scope="col"><span className="sr-only">Eliminar</span></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {dayBreaks.map((b) => (
-                          <tr key={b.id}>
-                            <td>{b.start_time.slice(0, 5)}</td>
-                            <td>{b.end_time.slice(0, 5)}</td>
-                            <td>
-                              <button className="btn btn-sm btn-danger" onClick={() => deleteBreak(b.id)}>
-                                Eliminar
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
+                {/* Descansos (solo horas dentro de los tramos del día) */}
                 <div className="stack gap-2">
                   <p className="text-sm" style={{ fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center' }}>
-                    Agregar un descanso (opcional)
-                    <HelpTip text="Una pausa dentro de tu horario de atención, por ejemplo la colación. Durante el descanso no se podrá reservar." />
+                    Descansos (opcional)
+                    <HelpTip text="Pausas dentro de tu atención, como la colación. Solo puedes elegir horas dentro de tus tramos." />
                   </p>
-                  <div className="cluster gap-2" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                    <div className="field" style={{ marginBottom: 0 }}>
-                      <label htmlFor={`break-start-${weekday}`}>Desde</label>
-                      <select
-                        id={`break-start-${weekday}`}
-                        value={breakEntry.start}
-                        onChange={(e) => setNewBreak((prev) => ({
-                          ...prev,
-                          [weekday]: { ...breakEntry, start: e.target.value },
-                        }))}
-                        style={{ maxWidth: 120 }}
-                      >
-                        <option value="">—</option>
-                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
-                      </select>
+                  {!canAddBreak && (
+                    <p className="text-sm muted" style={{ margin: 0 }}>
+                      Primero agrega un tramo de atención para poder marcar un descanso.
+                    </p>
+                  )}
+                  {day.descansos.map((b, i) => (
+                    <div key={i} className="cluster gap-2" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div className="field" style={{ marginBottom: 0 }}>
+                        <label htmlFor={`desc-start-${weekday}-${i}`}>Desde</label>
+                        <select id={`desc-start-${weekday}-${i}`} value={b.start}
+                          onChange={(e) => updateDescanso(weekday, i, 'start', e.target.value)} style={{ maxWidth: 110 }}>
+                          <option value="">—</option>
+                          {brkOpts.map((o) => (<option key={o} value={o}>{o}</option>))}
+                        </select>
+                      </div>
+                      <div className="field" style={{ marginBottom: 0 }}>
+                        <label htmlFor={`desc-end-${weekday}-${i}`}>Hasta</label>
+                        <select id={`desc-end-${weekday}-${i}`} value={b.end}
+                          onChange={(e) => updateDescanso(weekday, i, 'end', e.target.value)} style={{ maxWidth: 110 }}>
+                          <option value="">—</option>
+                          {brkOpts.map((o) => (<option key={o} value={o}>{o}</option>))}
+                        </select>
+                      </div>
+                      <button className="btn btn-sm btn-ghost" onClick={() => removeDescanso(weekday, i)}
+                        aria-label={`Quitar descanso de ${dayName}`}>
+                        Quitar
+                      </button>
                     </div>
-                    <div className="field" style={{ marginBottom: 0 }}>
-                      <label htmlFor={`break-end-${weekday}`}>Hasta</label>
-                      <select
-                        id={`break-end-${weekday}`}
-                        value={breakEntry.end}
-                        onChange={(e) => setNewBreak((prev) => ({
-                          ...prev,
-                          [weekday]: { ...breakEntry, end: e.target.value },
-                        }))}
-                        style={{ maxWidth: 120 }}
-                      >
-                        <option value="">—</option>
-                        {TIME_OPTIONS.map((t) => (<option key={t} value={t}>{t}</option>))}
-                      </select>
+                  ))}
+                  {canAddBreak && (
+                    <div>
+                      <button className="btn btn-sm btn-ghost" onClick={() => addDescanso(weekday)}>
+                        + Agregar descanso
+                      </button>
                     </div>
-                    <button
-                      className="btn btn-sm btn-ghost"
-                      onClick={() => addBreak(weekday)}
-                      disabled={savingDay === weekday}
-                    >
-                      {savingDay === weekday ? 'Guardando…' : 'Agregar descanso'}
-                    </button>
-                  </div>
+                  )}
                 </div>
               </div>
             );
           })}
+
+          {/* Errores, éxito y botón ÚNICO de guardado */}
+          {advError && <div className="alert alert-error" role="alert">{advError}</div>}
+          {advSuccess && <div className="alert alert-success" role="status">{advSuccess}</div>}
+          <button
+            className="btn btn-primary btn-block"
+            onClick={saveAdvanced}
+            disabled={advSaving}
+            aria-busy={advSaving}
+          >
+            {advSaving ? 'Guardando…' : 'Guardar horario'}
+          </button>
         </>
       )}
     </div>
